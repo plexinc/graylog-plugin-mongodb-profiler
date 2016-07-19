@@ -7,6 +7,7 @@ import com.google.common.eventbus.Subscribe;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
 import com.mongodb.MongoClient;
+import com.mongodb.MongoClientOptions;
 import com.mongodb.MongoCredential;
 import com.mongodb.ServerAddress;
 import org.graylog2.plugin.LocalMetricRegistry;
@@ -36,10 +37,20 @@ public class MongoDBProfilerTransport implements Transport {
 
     private static final Logger LOG = LoggerFactory.getLogger(MongoDBProfilerTransport.class);
 
+    private final enum AuthMechValues {
+      MONGO_CR,
+      SCRAM_SHA_1
+    };
+    private final ImmutableMap<String, int> authMechChoices = \
+      ImmutableMap.of("MONGO-CR", MONGO_CR,
+                      "SCRAM-SHA-1", SCRAM_SHA_1);
+
     private static final String CK_MONGO_HOST = "mongo_host";
     private static final String CK_MONGO_PORT = "mongo_port";
     private static final String CK_MONGO_DB = "mongo_db";
     private static final String CK_MONGO_USE_AUTH = "mongo_use_auth";
+    private static final String CK_MONGO_USE_SSL = "mongo_use_ssl";
+    private static final String CK_MONGO_AUTH_MECH = "mongo_auth_mech";
     private static final String CK_MONGO_USER = "mongo_user";
     private static final String CK_MONGO_PW = "mongo_password";
 
@@ -101,14 +112,33 @@ public class MongoDBProfilerTransport implements Transport {
         String mongoHost = configuration.getString(CK_MONGO_HOST);
 
         MongoClient mongoClient;
+        MongoClientOptions clientOptions = null;
         try {
-            if (configuration.getBoolean(CK_MONGO_USE_AUTH)) {
-                final MongoCredential credentials = MongoCredential.createMongoCRCredential(
-                        configuration.getString(CK_MONGO_USER),
-                        configuration.getString(CK_MONGO_DB),
-                        configuration.getString(CK_MONGO_PW).toCharArray()
-                );
+            if (configuration.getBoolean(CK_MONGO_USE_SSL)) {
+              clientOptions = MongoClientOptions.Builder.builder().sslEnabled(true).build();
+            }
 
+            if (configuration.getBoolean(CK_MONGO_USE_AUTH)) {
+                if (configuration.getInt(CK_MONGO_AUTH_MECH) == MONGO_CR) {
+                  final MongoCredential credentials = MongoCredential.createMongoCRCredential(
+                          configuration.getString(CK_MONGO_USER),
+                          configuration.getString(CK_MONGO_DB),
+                          configuration.getString(CK_MONGO_PW).toCharArray()
+                  );
+
+                } else if (configuration.getInt(CK_MONGO_AUTH_MECH) == SCRAM_SHA_1) {
+                  final MongoCredential credentials = MongoCredential.createScramSha1Credential(
+                          configuration.getString(CK_MONGO_USER),
+                          configuration.getString(CK_MONGO_DB),
+                          configuration.getString(CK_MONGO_PW).toCharArray()
+                  );
+                } else {
+                  final MongoCredential credentials = MongoCredential.createCredential(
+                          configuration.getString(CK_MONGO_USER),
+                          configuration.getString(CK_MONGO_DB),
+                          configuration.getString(CK_MONGO_PW).toCharArray()
+                  );
+                }
                 List<MongoCredential> credentialList = new ArrayList<MongoCredential>(){{ add(credentials); }};
 
                 if(mongoHost.contains(",")) {
@@ -119,7 +149,12 @@ public class MongoDBProfilerTransport implements Transport {
                         replicaHosts.add(new ServerAddress(host, configuration.getInt(CK_MONGO_PORT)));
                     }
 
-                    mongoClient = new MongoClient(replicaHosts, credentialList);
+                    if (clientOptions != null) {
+                      mongoClient = new MongoClient(replicaHosts, credentialList, clientOptions);
+                    else {
+                      mongoClient = new MongoClient(replicaHosts, credentialList);
+                    }
+
                 } else {
                     // Authenticated single host.
                     ServerAddress serverAddress = new ServerAddress(
@@ -127,7 +162,12 @@ public class MongoDBProfilerTransport implements Transport {
                             configuration.getInt(CK_MONGO_PORT)
                     );
 
-                    mongoClient = new MongoClient(serverAddress, credentialList);
+                    if (clientOptions != null) {
+                      mongoClient = new MongoClient(serverAddress, credentialList, clientOptions);
+                    else {
+                      mongoClient = new MongoClient(serverAddress, credentialList);
+                    }
+
                 }
             } else {
                 if(mongoHost.contains(",")) {
@@ -138,7 +178,12 @@ public class MongoDBProfilerTransport implements Transport {
                         replicaHosts.add(new ServerAddress(host, configuration.getInt(CK_MONGO_PORT)));
                     }
 
-                    mongoClient = new MongoClient(replicaHosts);
+                    if (clientOptions != null) {
+                      mongoClient = new MongoClient(replicaHosts, credentialList, clientOptions);
+                    else {
+                      mongoClient = new MongoClient(replicaHosts, credentialList);
+                    }
+
                 } else {
                     // Unauthenticated single host.
                     ServerAddress serverAddress = new ServerAddress(
@@ -146,7 +191,12 @@ public class MongoDBProfilerTransport implements Transport {
                             configuration.getInt(CK_MONGO_PORT)
                     );
 
-                    mongoClient = new MongoClient(serverAddress);
+                    if (clientOptions != null) {
+                      mongoClient = new MongoClient(serverAddress, credentialList, clientOptions);
+                    else {
+                      mongoClient = new MongoClient(serverAddress, credentialList);
+                    }
+
                 }
             }
         } catch (UnknownHostException e) {
@@ -225,11 +275,30 @@ public class MongoDBProfilerTransport implements Transport {
 
             request.addField(
                     new BooleanField(
+                            CK_MONGO_USE_SSL,
+                            "Use SSL?",
+                            false,
+                            "Use SSL encryption?"
+                    )
+            );
+
+            request.addField(
+                    new BooleanField(
                             CK_MONGO_USE_AUTH,
                             "Use authentication?",
                             false,
                             "Use MongoDB authentication?"
                     )
+            );
+
+            request.addField(
+                    new DropdownField(
+                            CK_MONGO_AUTH_MECH,
+                            "MongoDB authentication mechanism",
+                            MONGO_CR,
+                            authMechChoices,
+                            "MongoDB authentication mechanism. Only used if authentication is enabled.",
+                            ConfigurationField.Optional.OPTIONAL)
             );
 
             request.addField(
