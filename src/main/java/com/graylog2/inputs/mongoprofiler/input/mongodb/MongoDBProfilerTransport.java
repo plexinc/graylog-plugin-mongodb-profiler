@@ -2,6 +2,7 @@ package com.graylog2.inputs.mongoprofiler.input.mongodb;
 
 import com.codahale.metrics.MetricSet;
 import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.google.inject.assistedinject.Assisted;
@@ -10,6 +11,7 @@ import com.mongodb.MongoClient;
 import com.mongodb.MongoClientOptions;
 import com.mongodb.MongoCredential;
 import com.mongodb.ServerAddress;
+import com.mongodb.MongoSocketException;
 import org.graylog2.plugin.LocalMetricRegistry;
 import org.graylog2.plugin.ServerStatus;
 import org.graylog2.plugin.configuration.Configuration;
@@ -26,7 +28,6 @@ import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -37,13 +38,10 @@ public class MongoDBProfilerTransport implements Transport {
 
     private static final Logger LOG = LoggerFactory.getLogger(MongoDBProfilerTransport.class);
 
-    private final enum AuthMechValues {
-      MONGO_CR,
-      SCRAM_SHA_1
-    };
-    private final ImmutableMap<String, int> authMechChoices = \
-      ImmutableMap.of("MONGO-CR", MONGO_CR,
-                      "SCRAM-SHA-1", SCRAM_SHA_1);
+    private static final ImmutableMap<String, String> authMechChoices = ImmutableMap.of("MONGO-CR",
+                                                                                        MongoCredential.MONGODB_CR_MECHANISM,
+                                                                                        "SCRAM-SHA-1",
+                                                                                        MongoCredential.SCRAM_SHA_1_MECHANISM);
 
     private static final String CK_MONGO_HOST = "mongo_host";
     private static final String CK_MONGO_PORT = "mongo_port";
@@ -78,7 +76,7 @@ public class MongoDBProfilerTransport implements Transport {
 
     @Subscribe
     public void lifecycleStateChange(Lifecycle lifecycle) {
-        LOG.debug("Lifecycle changed to {}", lifecycle);
+        LOG.info("Lifecycle changed to {}", lifecycle);
         switch (lifecycle) {
             case PAUSED:
             case FAILED:
@@ -106,34 +104,37 @@ public class MongoDBProfilerTransport implements Transport {
 
         serverEventBus.register(this);
 
-        LOG.debug("Launching MongoDB profiler reader.");
+        LOG.info("Launching MongoDB profiler reader.");
 
         Configuration configuration = input.getConfiguration();
         String mongoHost = configuration.getString(CK_MONGO_HOST);
 
         MongoClient mongoClient;
-        MongoClientOptions clientOptions = null;
         try {
+           MongoClientOptions clientOptions = null;
+           final MongoCredential credentials;
+
+
             if (configuration.getBoolean(CK_MONGO_USE_SSL)) {
-              clientOptions = MongoClientOptions.Builder.builder().sslEnabled(true).build();
+              clientOptions = MongoClientOptions.builder().sslEnabled(true).build();
             }
 
             if (configuration.getBoolean(CK_MONGO_USE_AUTH)) {
-                if (configuration.getInt(CK_MONGO_AUTH_MECH) == MONGO_CR) {
-                  final MongoCredential credentials = MongoCredential.createMongoCRCredential(
+                if (configuration.getString(CK_MONGO_AUTH_MECH) == MongoCredential.MONGODB_CR_MECHANISM.toString()) {
+                  credentials = MongoCredential.createMongoCRCredential(
                           configuration.getString(CK_MONGO_USER),
                           configuration.getString(CK_MONGO_DB),
                           configuration.getString(CK_MONGO_PW).toCharArray()
                   );
 
-                } else if (configuration.getInt(CK_MONGO_AUTH_MECH) == SCRAM_SHA_1) {
-                  final MongoCredential credentials = MongoCredential.createScramSha1Credential(
+                } else if (configuration.getString(CK_MONGO_AUTH_MECH) == MongoCredential.SCRAM_SHA_1_MECHANISM.toString()) {
+                  credentials = MongoCredential.createScramSha1Credential(
                           configuration.getString(CK_MONGO_USER),
                           configuration.getString(CK_MONGO_DB),
                           configuration.getString(CK_MONGO_PW).toCharArray()
                   );
                 } else {
-                  final MongoCredential credentials = MongoCredential.createCredential(
+                  credentials = MongoCredential.createCredential(
                           configuration.getString(CK_MONGO_USER),
                           configuration.getString(CK_MONGO_DB),
                           configuration.getString(CK_MONGO_PW).toCharArray()
@@ -151,7 +152,7 @@ public class MongoDBProfilerTransport implements Transport {
 
                     if (clientOptions != null) {
                       mongoClient = new MongoClient(replicaHosts, credentialList, clientOptions);
-                    else {
+                    } else {
                       mongoClient = new MongoClient(replicaHosts, credentialList);
                     }
 
@@ -164,7 +165,7 @@ public class MongoDBProfilerTransport implements Transport {
 
                     if (clientOptions != null) {
                       mongoClient = new MongoClient(serverAddress, credentialList, clientOptions);
-                    else {
+                    } else {
                       mongoClient = new MongoClient(serverAddress, credentialList);
                     }
 
@@ -179,9 +180,9 @@ public class MongoDBProfilerTransport implements Transport {
                     }
 
                     if (clientOptions != null) {
-                      mongoClient = new MongoClient(replicaHosts, credentialList, clientOptions);
-                    else {
-                      mongoClient = new MongoClient(replicaHosts, credentialList);
+                      mongoClient = new MongoClient(replicaHosts, clientOptions);
+                    } else {
+                      mongoClient = new MongoClient(replicaHosts);
                     }
 
                 } else {
@@ -192,15 +193,15 @@ public class MongoDBProfilerTransport implements Transport {
                     );
 
                     if (clientOptions != null) {
-                      mongoClient = new MongoClient(serverAddress, credentialList, clientOptions);
-                    else {
-                      mongoClient = new MongoClient(serverAddress, credentialList);
+                      mongoClient = new MongoClient(serverAddress, clientOptions);
+                    } else {
+                      mongoClient = new MongoClient(serverAddress);
                     }
 
                 }
             }
-        } catch (UnknownHostException e) {
-            throw new MisfireException("Could not connect to MongoDB. Unknown host.", e);
+        } catch (MongoSocketException e) {
+            throw new MisfireException("Could not connect to MongoDB.", e);
         }
 
         // Try the connection.
@@ -217,16 +218,20 @@ public class MongoDBProfilerTransport implements Transport {
                 localRegistry
         );
 
+        LOG.info("MongoDB subscriber starting");
         subscriber.start();
+        LOG.info("MongoDB subscriber started");
     }
 
     @Override
     public void stop() {
+        LOG.info("MongoDB subscriber stopping");
         if(subscriber != null) {
             subscriber.terminate();
         }
 
         serverEventBus.unregister(this);
+        LOG.info("MongoDB subscriber stopped and EventBus unregistered");
     }
 
     @FactoryClass
@@ -295,7 +300,7 @@ public class MongoDBProfilerTransport implements Transport {
                     new DropdownField(
                             CK_MONGO_AUTH_MECH,
                             "MongoDB authentication mechanism",
-                            MONGO_CR,
+                            MongoCredential.MONGODB_CR_MECHANISM,
                             authMechChoices,
                             "MongoDB authentication mechanism. Only used if authentication is enabled.",
                             ConfigurationField.Optional.OPTIONAL)
