@@ -39,9 +39,9 @@ public class MongoDBProfilerTransport implements Transport {
     private static final Logger LOG = LoggerFactory.getLogger(MongoDBProfilerTransport.class);
 
     private static final ImmutableMap<String, String> authMechChoices = ImmutableMap.of("MONGO-CR",
-                                                                                        MongoCredential.MONGODB_CR_MECHANISM,
+                                                                                        MongoCredential.MONGODB_CR_MECHANISM.toString(),
                                                                                         "SCRAM-SHA-1",
-                                                                                        MongoCredential.SCRAM_SHA_1_MECHANISM);
+                                                                                        MongoCredential.SCRAM_SHA_1_MECHANISM.toString());
 
     private static final String CK_MONGO_HOST = "mongo_host";
     private static final String CK_MONGO_PORT = "mongo_port";
@@ -109,6 +109,16 @@ public class MongoDBProfilerTransport implements Transport {
         Configuration configuration = input.getConfiguration();
         String mongoHost = configuration.getString(CK_MONGO_HOST);
 
+        LOG.info("Dump configuration: ");
+        LOG.info("CK_MONGO_HOST: "+ configuration.getString(CK_MONGO_HOST));
+        LOG.info("CK_MONGO_PORT: "+ configuration.getInt(CK_MONGO_PORT));
+        LOG.info("CK_MONGO_USER: "+ configuration.getString(CK_MONGO_USER));
+        LOG.info("CK_MONGO_PW: "+ configuration.getString(CK_MONGO_PW));
+        LOG.info("CK_MONGO_DB: "+ configuration.getString(CK_MONGO_DB));
+        LOG.info("CK_MONGO_USE_SSL: "+ configuration.getBoolean(CK_MONGO_USE_SSL));
+        LOG.info("CK_MONGO_USE_AUTH: "+ configuration.getBoolean(CK_MONGO_USE_AUTH));
+        LOG.info("CK_MONGO_AUTH_MECH: "+ configuration.getString(CK_MONGO_AUTH_MECH));
+
         MongoClient mongoClient;
         try {
            MongoClientOptions clientOptions = null;
@@ -116,23 +126,28 @@ public class MongoDBProfilerTransport implements Transport {
 
 
             if (configuration.getBoolean(CK_MONGO_USE_SSL)) {
+              LOG.info("before MongoClientOptions.builder().sslEnabled(true).build()");
               clientOptions = MongoClientOptions.builder().sslEnabled(true).build();
+              LOG.info("after MongoClientOptions.builder().sslEnabled(true).build()");
             }
 
             if (configuration.getBoolean(CK_MONGO_USE_AUTH)) {
                 if (configuration.getString(CK_MONGO_AUTH_MECH) == MongoCredential.MONGODB_CR_MECHANISM.toString()) {
+                  LOG.info("before MongoCredential.createMongoCRCredential");
                   credentials = MongoCredential.createMongoCRCredential(
                           configuration.getString(CK_MONGO_USER),
                           configuration.getString(CK_MONGO_DB),
                           configuration.getString(CK_MONGO_PW).toCharArray()
                   );
-
+                  LOG.info("after MongoCredential.createMongoCRCredential");
                 } else if (configuration.getString(CK_MONGO_AUTH_MECH) == MongoCredential.SCRAM_SHA_1_MECHANISM.toString()) {
+                  LOG.info("before MongoCredential.createScramSha1Credential");
                   credentials = MongoCredential.createScramSha1Credential(
                           configuration.getString(CK_MONGO_USER),
                           configuration.getString(CK_MONGO_DB),
                           configuration.getString(CK_MONGO_PW).toCharArray()
                   );
+                  LOG.info("after MongoCredential.createScramSha1Credential");
                 } else {
                   credentials = MongoCredential.createCredential(
                           configuration.getString(CK_MONGO_USER),
@@ -143,6 +158,8 @@ public class MongoDBProfilerTransport implements Transport {
                 List<MongoCredential> credentialList = new ArrayList<MongoCredential>(){{ add(credentials); }};
 
                 if(mongoHost.contains(",")) {
+                    LOG.info("Authenticated replica set");
+
                     // Authenticated replica set.
                     String[] hosts = mongoHost.split(",");
                     List<ServerAddress> replicaHosts = Lists.newArrayList();
@@ -150,24 +167,33 @@ public class MongoDBProfilerTransport implements Transport {
                         replicaHosts.add(new ServerAddress(host, configuration.getInt(CK_MONGO_PORT)));
                     }
 
+                    LOG.info("before new MongoClient: rs: " + replicaHosts);
+                    LOG.info("before new MongoClient: creds: " + credentialList);
+                    LOG.info("before new MongoClient: opts: " + clientOptions);
                     if (clientOptions != null) {
                       mongoClient = new MongoClient(replicaHosts, credentialList, clientOptions);
                     } else {
                       mongoClient = new MongoClient(replicaHosts, credentialList);
                     }
+                    LOG.info("after new MongoClient");
 
                 } else {
+                    LOG.info("Authenticated single host");
                     // Authenticated single host.
                     ServerAddress serverAddress = new ServerAddress(
                             mongoHost,
                             configuration.getInt(CK_MONGO_PORT)
                     );
 
-                    if (clientOptions != null) {
+                    LOG.info("before new MongoClient: address: " + serverAddress);
+                    LOG.info("before new MongoClient: creds: " + credentialList);
+                    LOG.info("before new MongoClient: opts: " + clientOptions);
+                     if (clientOptions != null) {
                       mongoClient = new MongoClient(serverAddress, credentialList, clientOptions);
                     } else {
                       mongoClient = new MongoClient(serverAddress, credentialList);
                     }
+                    LOG.info("after new MongoClient");
 
                 }
             } else {
