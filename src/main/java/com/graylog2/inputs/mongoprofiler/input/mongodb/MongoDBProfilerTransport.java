@@ -32,6 +32,11 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.lang.StringBuffer;
 
+import java.security.cert.X509Certificate;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import javax.net.ssl.SSLContext;
+
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
@@ -59,6 +64,30 @@ public class MongoDBProfilerTransport implements Transport {
   private ProfileSubscriber subscriber;
 
   private final LocalMetricRegistry localRegistry;
+
+  private static SSLContext trustAllSSLContext = null;
+  private static TrustManager[] trustAllCerts;
+
+  // used in case of ssl enabled to trust all certificates
+  public static class TrustAllManager implements X509TrustManager {
+    @Override
+    public X509Certificate[] getAcceptedIssuers() {
+      return null;
+    }
+
+    @Override
+    public void checkClientTrusted(X509Certificate[] certs, String authType) {
+      // No-op, to trust all certs
+    }
+
+    @Override
+    public void checkServerTrusted(X509Certificate[] certs, String authType) {
+      // No-op, to trust all certs
+    }
+  }
+
+
+
 
   @AssistedInject
   public MongoDBProfilerTransport(@Assisted final Configuration configuration,
@@ -106,6 +135,7 @@ public class MongoDBProfilerTransport implements Transport {
     serverEventBus.register(this);
 
     LOG.info("Launching MongoDB profiler reader.");
+    LOG.info("trustStore: " + System.getProperty("javax.net.ssl.trustStore"));
 
     Configuration configuration = input.getConfiguration();
     String mongoHost = configuration.getString(CK_MONGO_HOST);
@@ -156,6 +186,37 @@ public class MongoDBProfilerTransport implements Transport {
       uri.append("/" + configuration.getString(CK_MONGO_DB));
       if (configuration.getBoolean(CK_MONGO_USE_SSL)) {
         uri.append("?ssl=true");
+
+        if (trustAllCerts == null) {
+          trustAllCerts = new TrustManager[] {
+            new TrustAllManager()
+          };
+        }
+
+        try {
+          if (trustAllSSLContext == null) {
+            try {
+              trustAllSSLContext = SSLContext.getInstance("TLS");
+              trustAllSSLContext.init(null, trustAllCerts, null);
+            } catch (Exception e) {
+              LOG.error("ERROR: "+ e);
+              throw e;
+            }
+          }
+
+          if (trustAllSSLContext != SSLContext.getDefault()) {
+            try {
+              SSLContext.setDefault(trustAllSSLContext);
+            } catch (Exception e) {
+              LOG.error("ERROR: "+ e);
+              throw e;
+            }
+          }
+        } catch (Exception e) {
+          LOG.error("ERROR: "+ e);
+          throw new MisfireException("Could not setup SSL context for trusting certs.", e);
+        }
+
       } else {
         uri.append("?ssl=false");
       }
