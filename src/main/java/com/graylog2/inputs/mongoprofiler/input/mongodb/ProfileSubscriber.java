@@ -80,7 +80,7 @@ public class ProfileSubscriber extends Thread {
                         .addOption(Bytes.QUERYOPTION_AWAITDATA);
 
                 try {
-                    while(mongoClient.getConnector().isOpen() && cursor.hasNext()) {
+                    while(cursor.hasNext()) {
                         cursorReads.mark();
 
                         if (stopRequested) {
@@ -99,7 +99,7 @@ public class ProfileSubscriber extends Thread {
                         }
                     }
                 } finally {
-                    if (cursor != null && mongoClient.getConnector().isOpen()) {
+                    if (cursor != null) {
                         cursor.close();
                     }
                 }
